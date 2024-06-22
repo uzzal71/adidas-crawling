@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/tebeka/selenium"
-	"github.com/xuri/excelize/v2"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -157,17 +156,43 @@ func main() {
 		}
 		defer wd.Quit()
 
-		if err := wd.Get("https://shop.adidas.jp/item/?gender=mens&category=wear&order=1&page=1"); err != nil {
+		if err := wd.Get("https://shop.adidas.jp/men/"); err != nil {
 			log.Fatalf("Failed to load page: %v", err)
 		}
 
 		time.Sleep(5 * time.Second)
 
-		pageCount := getPageCount(wd)
+		categoryElems, err := wd.FindElements(selenium.ByCSSSelector, ".lpc-ukLocalNavigation_itemList li a")
+		if err != nil {
+			log.Fatalf("Failed to find category elements: %v", err)
+		}
 
-		for i := 1; i <= pageCount; i++ {
-			pageURL := fmt.Sprintf("https://shop.adidas.jp/item/?gender=mens&category=wear&order=1&page=%d", i)
-			productUrlChan <- pageURL
+		var categories []string
+		for _, elem := range categoryElems {
+			href, err := elem.GetAttribute("href")
+			if err != nil {
+				log.Printf("Failed to get href attribute: %v", err)
+				continue
+			}
+			if href != "" {
+				fullURL := "https://shop.adidas.jp" + href
+				categories = append(categories, fullURL)
+			}
+		}
+
+		for key, category := range categories {
+			if key == 1 {
+				if err := wd.Get(category); err != nil {
+					log.Fatalf("Failed to load category page: %v", err)
+				}
+
+				pageCount := getPageCount(wd)
+
+				for i := 1; i <= pageCount; i++ {
+					pageURL := fmt.Sprintf("%s&page=%d", category, i)
+					productUrlChan <- pageURL
+				}
+			}
 		}
 
 		close(productUrlChan)
@@ -208,8 +233,6 @@ func main() {
 		close(productChan)
 		wg.Wait()
 	}
-
-	exportToExcel(productCollection)
 
 	log.Println("Crawling finished!")
 }
@@ -827,66 +850,4 @@ func scrapeProduct(wd selenium.WebDriver, url string) *Product {
 	// ==================== Tags End ==========================
 
 	return product
-}
-
-func exportToExcel(productCollection *mongo.Collection) {
-	cursor, err := productCollection.Find(context.Background(), bson.M{})
-	if err != nil {
-		log.Fatalf("Failed to find products: %v", err)
-	}
-	defer cursor.Close(context.Background())
-
-	var products []Product
-	if err = cursor.All(context.Background(), &products); err != nil {
-		log.Fatalf("Failed to iterate over cursor: %v", err)
-	}
-
-	f := excelize.NewFile()
-	sheetName := "Products"
-	index, _ := f.NewSheet(sheetName)
-
-	// Set the headers
-	headers := []string{
-		"SerialNo", "producturl", "breadcrumbs", "category", "title", "price", "availablecolors",
-		"availablesizes", "media", "coordinatedproducts", "descriptionheading",
-		"descriptiontitle", "description", "specifications", "specialdescription",
-		"sizechart", "sizeremarks", "reviewsummary", "reviews", "tags",
-	}
-	for i, header := range headers {
-		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
-		f.SetCellValue(sheetName, cell, header)
-	}
-
-	// Set the product data
-	for i, product := range products {
-		rowNum := i + 2
-		f.SetCellValue(sheetName, fmt.Sprintf("A%d", rowNum), i+1)
-		f.SetCellValue(sheetName, fmt.Sprintf("A%d", rowNum), fmt.Sprintf("%v", product.ProductURL))
-		f.SetCellValue(sheetName, fmt.Sprintf("B%d", rowNum), fmt.Sprintf("%v", product.Breadcrumbs))
-		f.SetCellValue(sheetName, fmt.Sprintf("C%d", rowNum), fmt.Sprintf("%v", product.Category))
-		f.SetCellValue(sheetName, fmt.Sprintf("D%d", rowNum), fmt.Sprintf("%v", product.Title))
-		f.SetCellValue(sheetName, fmt.Sprintf("E%d", rowNum), fmt.Sprintf("%v", product.Price))
-		f.SetCellValue(sheetName, fmt.Sprintf("F%d", rowNum), fmt.Sprintf("%v", product.AvailableColors))
-		f.SetCellValue(sheetName, fmt.Sprintf("G%d", rowNum), fmt.Sprintf("%v", product.AvailableSizes))
-		f.SetCellValue(sheetName, fmt.Sprintf("H%d", rowNum), fmt.Sprintf("%v", product.Media))
-		f.SetCellValue(sheetName, fmt.Sprintf("I%d", rowNum), fmt.Sprintf("%v", product.CoordinatedProducts))
-		f.SetCellValue(sheetName, fmt.Sprintf("J%d", rowNum), fmt.Sprintf("%v", product.DescriptionHeading))
-		f.SetCellValue(sheetName, fmt.Sprintf("K%d", rowNum), fmt.Sprintf("%v", product.DescriptionTitle))
-		f.SetCellValue(sheetName, fmt.Sprintf("L%d", rowNum), fmt.Sprintf("%v", product.Description))
-		f.SetCellValue(sheetName, fmt.Sprintf("M%d", rowNum), fmt.Sprintf("%v", product.Specifications))
-		f.SetCellValue(sheetName, fmt.Sprintf("N%d", rowNum), fmt.Sprintf("%v", product.SpecialDescription))
-		f.SetCellValue(sheetName, fmt.Sprintf("O%d", rowNum), fmt.Sprintf("%v", product.SizeChart))
-		f.SetCellValue(sheetName, fmt.Sprintf("P%d", rowNum), fmt.Sprintf("%v", product.SizeRemarks))
-		f.SetCellValue(sheetName, fmt.Sprintf("Q%d", rowNum), fmt.Sprintf("%v", product.ReviewSummary))
-		f.SetCellValue(sheetName, fmt.Sprintf("R%d", rowNum), fmt.Sprintf("%v", product.Reviews))
-		f.SetCellValue(sheetName, fmt.Sprintf("S%d", rowNum), fmt.Sprintf("%v", product.Tags))
-	}
-
-	f.SetActiveSheet(index)
-
-	if err := f.SaveAs("products.xlsx"); err != nil {
-		log.Fatalf("Failed to save file: %v", err)
-	}
-
-	log.Println("Products exported to products.xlsx")
 }
