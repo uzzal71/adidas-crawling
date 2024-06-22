@@ -22,3 +22,8 @@ const (
 	productCollection    = "products"
 )
 ```
+
+# Run program
+```
+go run main.go
+```
